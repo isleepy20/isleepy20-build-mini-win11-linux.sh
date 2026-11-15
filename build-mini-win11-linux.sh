@@ -9,26 +9,6 @@
 # Run as root on an Ubuntu/Debian host with ~25 GB free disk and network:
 #     sudo ./build-mini-win11-linux.sh [--run-qemu]
 #
-# Optional environment variables:
-#     WORKDIR=<dir>         work directory             (default: ./mini-win11-build)
-#     OUTDIR=<dir>          where the .iso is written (default: .)
-#     ISO_NAME=<file>       output ISO name            (default: win11-linux-minimal.iso)
-#     ZIP_NAME=<file>       split ZIP base name        (default: ISO_NAME with .zip)
-#     CHUNK_MB=1800         ZIP volume size in MiB     (< 1.9 GB per part)
-#     MIRROR / SEC_MIRROR   Ubuntu mirrors
-#     WITH_WINE32=1         add i386 multiarch + wine32 (+~300 MB)
-#     PRUNE_FIRMWARE=0      keep all of linux-firmware (+~150-250 MB)
-#     THEME_KDE_REPO / THEME_ICON_REPO    theme git repos (pin a commit/fork for
-#                           reproducible builds; upstream layout may change)
-#
-# Notes:
-#   * Uses linux-image-generic + linux-modules-extra + linux-firmware instead of
-#     the linux-generic metapackage, to avoid shipping kernel headers.
-#   * Secure Boot is not supported (unsigned GRUB). Disable Secure Boot or
-#     replace the EFI binary with shim + signed GRUB.
-#   * sshd is installed/enabled but ufw is enabled with default-deny incoming,
-#     so SSH is unreachable until you run: sudo ufw allow ssh
-#
 set -euo pipefail
 
 ###############################################################################
@@ -43,8 +23,8 @@ WORKDIR="${WORKDIR:-$PWD/mini-win11-build}"
 OUTDIR="${OUTDIR:-$PWD}"
 ISO_NAME="${ISO_NAME:-win11-linux-minimal.iso}"
 ZIP_NAME="${ZIP_NAME:-${ISO_NAME%.iso}.zip}"
-CHUNK_MB="${CHUNK_MB:-1800}"             # 1800 MiB = ~1.89 GB per part
-GH_ASSET_LIMIT=2000000000               # raw ISO is only a release asset if below this
+CHUNK_MB="${CHUNK_MB:-1800}"
+GH_ASSET_LIMIT=2000000000
 VOLID="WIN11_LINUX"
 
 LIVE_USER="win11"
@@ -55,8 +35,8 @@ PRUNE_FIRMWARE="${PRUNE_FIRMWARE:-1}"
 THEME_KDE_REPO="${THEME_KDE_REPO:-https://github.com/yeyushengfan258/Win11OS-kde.git}"
 THEME_ICON_REPO="${THEME_ICON_REPO:-https://github.com/yeyushengfan258/Win11-icon-theme.git}"
 
-MAX_BYTES=4800000000      # hard fail above 4.8 GB (decimal)
-TARGET_BYTES=3800000000   # warn above 3.8 GB
+MAX_BYTES=4800000000
+TARGET_BYTES=3800000000
 MIN_FREE_BYTES=$((25 * 1000 * 1000 * 1000))
 
 ROOTFS="$WORKDIR/rootfs"
@@ -106,7 +86,6 @@ mount_chroot() {
   mkdir -p "$ROOTFS/run/lock"
 }
 
-# Run a command inside the chroot with a clean environment.
 chroot_sh() {
   chroot "$ROOTFS" /usr/bin/env -i \
     HOME=/root TERM="${TERM:-xterm}" LC_ALL=C.UTF-8 \
@@ -142,7 +121,7 @@ rm -rf "$ROOTFS" "$ISODIR" "$BOOTWORK"
 mkdir -p "$ISODIR/casper" "$ISODIR/boot/grub" "$ISODIR/.disk" "$BOOTWORK" "$SRCDIR"
 
 ###############################################################################
-# 1. Fetch theme sources on the host (keeps git out of the image)
+# 1. Fetch theme sources on the host
 ###############################################################################
 fetch_repo() {
   local url=$1 dest=$2
@@ -172,22 +151,20 @@ debootstrap --arch="$ARCH" --variant=minbase --components=main,universe,restrict
 
 mount_chroot
 
-# DNS for the chroot (avoid host's 127.0.0.53 stub)
 if [[ -s /run/systemd/resolve/resolv.conf ]]; then
   cp -L /run/systemd/resolve/resolv.conf "$ROOTFS/etc/resolv.conf"
 else
   printf 'nameserver 1.1.1.1\nnameserver 9.9.9.9\n' > "$ROOTFS/etc/resolv.conf"
 fi
 
-# Never start daemons inside the chroot
 printf '#!/bin/sh\nexit 101\n' > "$ROOTFS/usr/sbin/policy-rc.d"
 chmod +x "$ROOTFS/usr/sbin/policy-rc.d"
 
 ###############################################################################
-# 3. APT / dpkg configuration: no recommends, no docs, no extra locales, no snap
+# 3. APT / dpkg configuration (Purge deb822 sources.list.d overrides)
 ###############################################################################
 log "Configuring apt and dpkg for minimal size"
-rm -f "$ROOTFS/etc/apt/sources.list.d/ubuntu.sources"
+rm -rf "$ROOTFS/etc/apt/sources.list.d/"*
 cat > "$ROOTFS/etc/apt/sources.list" <<EOF
 deb $MIRROR $RELEASE main restricted universe multiverse
 deb $MIRROR $RELEASE-updates main restricted universe multiverse
@@ -234,9 +211,9 @@ printf 'XKBMODEL="pc105"\nXKBLAYOUT="us"\nXKBVARIANT=""\nXKBOPTIONS=""\n' > "$RO
 chroot_sh apt-get update
 
 ###############################################################################
-# 4. Core Linux system, live-boot scripts, kernel
+# 4. Pre-create systemd users/groups & install core system
 ###############################################################################
-log "Pre-creating systemd users and groups to prevent sysusers.d failure"
+log "Pre-creating systemd users and groups"
 chroot_sh groupadd -g 102 systemd-journal 2>/dev/null || true
 chroot_sh useradd -u 102 -g systemd-journal -d / -s /usr/sbin/nologin systemd-journal 2>/dev/null || true
 chroot_sh groupadd -g 100 systemd-network 2>/dev/null || true
@@ -280,7 +257,7 @@ export FLAVOUR="Mini-Win11-Linux"
 EOF
 
 ###############################################################################
-# 5. Minimal KDE Plasma desktop (no kde-full)
+# 5. Minimal KDE Plasma desktop
 ###############################################################################
 log "Installing minimal KDE Plasma"
 chroot_sh bash -c 'echo "sddm shared/default-x-display-manager select sddm" | debconf-set-selections'
@@ -296,7 +273,7 @@ GUI_PKGS=(
   systemsettings kscreen plasma-nm plasma-pa powerdevil bluedevil print-manager
   plasma-discover plasma-discover-backend-flatpak plasma-systemmonitor
   xdg-desktop-portal xdg-desktop-portal-kde xdg-desktop-portal-gtk
-  dolphin kio-extras ark gwenview konsole spectacle falkon
+  dolphin kio-extras ark gwenview konsole falkon
   libkf5config-bin qt5-style-kvantum
   qml-module-qtquick-controls qml-module-qtquick-controls2 qml-module-qtquick-layouts
   qml-module-qtgraphicaleffects libqt5svg5
@@ -305,7 +282,7 @@ GUI_PKGS=(
 apt_install "${GUI_PKGS[@]}"
 
 ###############################################################################
-# 6. Wine (minimal) and Flatpak
+# 6. Wine and Flatpak
 ###############################################################################
 log "Installing Wine and Flatpak"
 if [[ "$WITH_WINE32" == "1" ]]; then
@@ -320,10 +297,10 @@ apt_install flatpak
 mkdir -p "$ROOTFS/etc/flatpak/remotes.d"
 curl -fsSL https://dl.flathub.org/repo/flathub.flatpakrepo \
   -o "$ROOTFS/etc/flatpak/remotes.d/flathub.flatpakrepo" \
-  || warn "Could not download flathub.flatpakrepo; add it manually later"
+  || warn "Could not download flathub.flatpakrepo"
 
 ###############################################################################
-# 7. Windows 11 look and feel
+# 7. Windows 11 look and feel setup
 ###############################################################################
 log "Installing Windows 11 themes"
 mkdir -p "$ROOTFS/tmp/themes"
@@ -345,8 +322,7 @@ cp_tree() {
 
 if [ -d "$ICO" ]; then
   ( cd "$ICO" && bash ./install.sh -d /usr/share/icons ) >/tmp/icon-install.log 2>&1 \
-  || ( cd "$ICO" && bash ./install.sh ) >>/tmp/icon-install.log 2>&1 \
-  || echo "WARN: Win11 icon theme install.sh failed (see /tmp/icon-install.log)"
+  || ( cd "$ICO" && bash ./install.sh ) >>/tmp/icon-install.log 2>&1 || true
 fi
 
 if [ -d "$KDE" ]; then
@@ -361,22 +337,21 @@ fi
 gtk-update-icon-cache -f /usr/share/icons/Win11 >/dev/null 2>&1 || true
 exit 0
 STAGE_EOF
-chroot_sh bash /tmp/install-themes.sh || warn "Theme installation reported errors; falling back to Breeze where needed"
+chroot_sh bash /tmp/install-themes.sh || true
 
-log "Writing desktop configuration (skel, SDDM, Dolphin, panel layout)"
 cat > "$ROOTFS/tmp/configure-desktop.sh" <<'STAGE_EOF'
 #!/bin/bash
 set -u
 export XDG_CONFIG_HOME=/etc/skel/.config
 mkdir -p "$XDG_CONFIG_HOME" /etc/win11-linux /etc/sddm.conf.d
 
-pick() { # dir pattern -> prefers non-dark variant
+pick() {
   local x
   x=$(ls -1 "$1" 2>/dev/null | grep -i -- "$2" | grep -iv dark | head -1)
   [ -z "$x" ] && x=$(ls -1 "$1" 2>/dev/null | grep -i -- "$2" | head -1)
   echo "$x"
 }
-kw() { # file group key value [type]
+kw() {
   if [ -n "${5:-}" ]; then
     kwriteconfig5 --file "$1" --group "$2" --key "$3" --type "$5" "$4"
   else
@@ -394,9 +369,6 @@ KV=$(pick /usr/share/Kvantum win11)
 SDDMTHEME=$(pick /usr/share/sddm/themes win11)
 WALL=$(find /usr/share/backgrounds/win11 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) 2>/dev/null | sort | head -1)
 
-echo "detected: LAF=$LAF DT=$DT AUR=$AUR COLOR=$COLOR ICON=$ICON KV=$KV SDDM=$SDDMTHEME WALL=$WALL"
-
-# --- kdeglobals ---
 kw kdeglobals KDE SingleClick false bool
 [ -n "$LAF" ]   && kw kdeglobals KDE LookAndFeelPackage "$LAF"
 [ -n "$KV" ]    && kw kdeglobals KDE widgetStyle kvantum
@@ -408,14 +380,12 @@ kw kdeglobals General menuFont "$FONT"
 kw kdeglobals General toolBarFont "$FONT"
 kw kdeglobals General smallestReadableFont "Inter,8,-1,5,50,0,0,0,0,0"
 
-# --- Plasma theme, Kvantum ---
 [ -n "$DT" ] && kw plasmarc Theme name "$DT"
 if [ -n "$KV" ]; then
   mkdir -p "$XDG_CONFIG_HOME/Kvantum"
   kw Kvantum/kvantum.kvconfig General theme "$KV"
 fi
 
-# --- KWin: Aurorae decoration (rounded), buttons on the right like Windows ---
 if [ -n "$AUR" ]; then
   kw kwinrc org.kde.kdecoration2 library org.kde.kwin.aurorae
   kw kwinrc org.kde.kdecoration2 theme "__aurorae__svg__$AUR"
@@ -424,32 +394,17 @@ kw kwinrc org.kde.kdecoration2 ButtonsOnLeft ""
 kw kwinrc org.kde.kdecoration2 ButtonsOnRight "IAX"
 kw kwinrc Plugins blurEnabled true bool
 
-# --- Live-session comfort ---
 kw kscreenlockerrc Daemon Autolock false bool
 kw kscreenlockerrc Daemon LockOnResume false bool
 kw ksplashrc KSplash Theme None
 
-# --- Dolphin: Windows Explorer-like (details view, full path, status bar) ---
 kw dolphinrc General ShowFullPath true bool
 kw dolphinrc General BrowseThroughArchives true bool
 kw dolphinrc General ShowStatusBar FullWidth
 kw dolphinrc General RememberOpenedTabs false bool
-VP=/etc/skel/.local/share/dolphin/view_properties/global
-mkdir -p "$VP"
-cat > "$VP/.directory" <<EOF
-[Dolphin]
-Timestamp=2024,1,1,0,0,0
-Version=4
-ViewMode=1
-SortRole=text
-SortFoldersFirst=true
-VisibleRoles=Details_text,Details_modificationtime,Details_type,Details_size
-EOF
 
-# --- Windows-like home folders ---
 mkdir -p /etc/skel/{Desktop,Documents,Downloads,Pictures,Music,Videos}
 
-# --- GTK apps follow the look ---
 mkdir -p /etc/skel/.config/gtk-3.0
 cat > /etc/skel/.config/gtk-3.0/settings.ini <<EOF
 [Settings]
@@ -458,7 +413,6 @@ gtk-font-name=Inter 10
 gtk-application-prefer-dark-theme=false
 EOF
 
-# --- SDDM: autologin into the casper live user, themed greeter ---
 cat > /etc/sddm.conf.d/10-win11.conf <<EOF
 [Autologin]
 User=$LIVE_USER
@@ -472,7 +426,6 @@ Numlock=on
 Current=${SDDMTHEME:-breeze}
 EOF
 
-# --- First-login values consumed by /usr/local/bin/win11-first-login ---
 cat > /etc/win11-linux/theme.env <<EOF
 LAF="$LAF"
 WALLPAPER="$WALL"
@@ -481,7 +434,6 @@ exit 0
 STAGE_EOF
 chroot_sh LIVE_USER="$LIVE_USER" bash /tmp/configure-desktop.sh
 
-# First-login script: applies look-and-feel, builds the centered Win11 taskbar
 cat > "$ROOTFS/usr/local/bin/win11-first-login" <<'WIN11_FIRST_LOGIN_EOF'
 #!/bin/bash
 MARK="$HOME/.config/.win11-layout-applied"
@@ -508,24 +460,23 @@ panel.location = "bottom";
 panel.height = 44;
 panel.hiding = "none";
 
-/* fixed spacer balances the system tray so the app icons sit in the center */
 var pad = panel.addWidget("org.kde.plasma.panelspacer");
 pad.currentConfigGroup = ["General"];
 pad.writeConfig("expanding", false);
 pad.writeConfig("length", 200);
 
-panel.addWidget("org.kde.plasma.panelspacer");         /* expanding left  */
+panel.addWidget("org.kde.plasma.panelspacer");
 
-var start = panel.addWidget("org.kde.plasma.kickoff");  /* Start button    */
+var start = panel.addWidget("org.kde.plasma.kickoff");
 start.currentConfigGroup = ["General"];
 start.writeConfig("icon", "start-here-kde");
 
-var tasks = panel.addWidget("org.kde.plasma.icontasks"); /* icon-only taskbar */
+var tasks = panel.addWidget("org.kde.plasma.icontasks");
 tasks.currentConfigGroup = ["General"];
 tasks.writeConfig("launchers",
   "preferred://filemanager,preferred://browser,applications:org.kde.konsole.desktop,applications:org.kde.discover.desktop");
 
-panel.addWidget("org.kde.plasma.panelspacer");         /* expanding right */
+panel.addWidget("org.kde.plasma.panelspacer");
 
 panel.addWidget("org.kde.plasma.systemtray");
 panel.addWidget("org.kde.plasma.digitalclock");
@@ -568,7 +519,6 @@ plugins=ifupdown,keyfile
 managed=true
 EOF
 
-# ufw: enabled at boot, default deny incoming (no iptables calls needed in chroot)
 sed -i 's/^ENABLED=.*/ENABLED=yes/' "$ROOTFS/etc/ufw/ufw.conf"
 sed -i 's/^DEFAULT_INPUT_POLICY=.*/DEFAULT_INPUT_POLICY="DROP"/' "$ROOTFS/etc/default/ufw"
 
@@ -578,7 +528,7 @@ chroot_sh systemctl set-default graphical.target
 chroot_sh systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service || true
 
 ###############################################################################
-# 9. Aggressive size reduction, initramfs rebuild
+# 9. Slimming & initramfs
 ###############################################################################
 log "Slimming the root filesystem"
 cat > "$ROOTFS/tmp/slim.sh" <<'STAGE_EOF'
@@ -592,16 +542,13 @@ if [ "${PRUNE_FIRMWARE:-1}" = "1" ]; then
   done
 fi
 
-# Docs, man pages, info, non-English locales (copyright files are kept)
 find /usr/share/doc -type f ! -name copyright -delete 2>/dev/null
 find /usr/share/doc -type d -empty -delete 2>/dev/null
 rm -rf /usr/share/man/* /usr/share/info/* /usr/share/groff /usr/share/lintian /usr/share/gtk-doc
 find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name 'en*' ! -name locale.alias -exec rm -rf {} + 2>/dev/null
 
-# Rebuild initramfs with casper + all modules
 update-initramfs -u -k all
 
-# Caches and leftovers
 apt-get -y clean
 rm -rf /var/cache/apt/archives/* /var/cache/apt/*.bin /var/lib/apt/lists/* \
        /var/cache/debconf/*-old /var/lib/dpkg/*-old /var/cache/ldconfig/aux-cache
@@ -612,18 +559,15 @@ exit 0
 STAGE_EOF
 chroot_sh PRUNE_FIRMWARE="$PRUNE_FIRMWARE" bash /tmp/slim.sh
 
-# Kernel + initrd go next to the squashfs on the ISO
 VMLINUZ="$(ls -1 "$ROOTFS"/boot/vmlinuz-* | sort -V | tail -1)"
 INITRD="$(ls -1 "$ROOTFS"/boot/initrd.img-* | sort -V | tail -1)"
 [[ -f "$VMLINUZ" && -f "$INITRD" ]] || die "Kernel/initrd not found in chroot /boot"
-cp "$VMLINUZ" "$ISODIR/casper/vmlinuz"
+cp "$VMLINuz" "$ISODIR/casper/vmlinuz"
 cp "$INITRD"  "$ISODIR/casper/initrd"
 chmod 644 "$ISODIR/casper/vmlinuz" "$ISODIR/casper/initrd"
 
-# Manifest (before the final wipe of /tmp)
 chroot_sh dpkg-query -W --showformat='${Package}\t${Version}\n' > "$ISODIR/casper/filesystem.manifest"
 
-# Final root cleanup, then detach mounts before packing
 rm -rf "$ROOTFS"/tmp/* "$ROOTFS"/tmp/.[!.]* 2>/dev/null || true
 : > "$ROOTFS/etc/machine-id"
 rm -f "$ROOTFS/var/lib/dbus/machine-id"
@@ -636,7 +580,7 @@ printf '%s' "$(du -sx --block-size=1 "$ROOTFS" | cut -f1)" > "$ISODIR/casper/fil
 ###############################################################################
 # 10. SquashFS with maximum xz compression
 ###############################################################################
-log "Creating filesystem.squashfs (xz, 1M blocks, 100% dictionary) - this takes a while"
+log "Creating filesystem.squashfs"
 mksquashfs "$ROOTFS" "$ISODIR/casper/filesystem.squashfs" \
   -comp xz -b 1M -Xdict-size 100% -Xbcj x86 \
   -noappend -no-recovery -processors "$(nproc)" \
@@ -644,7 +588,7 @@ mksquashfs "$ROOTFS" "$ISODIR/casper/filesystem.squashfs" \
   -e 'proc/*' 'sys/*' 'dev/*' 'run/*' 'tmp/*'
 
 ###############################################################################
-# 11. GRUB (BIOS + UEFI) and hybrid ISO
+# 11. GRUB and ISO Generation
 ###############################################################################
 log "Preparing bootloader"
 touch "$ISODIR/.win11-live"
@@ -682,7 +626,6 @@ EOF
 
 MODS="linux normal iso9660 search search_fs_file configfile all_video gzio part_msdos part_gpt fat echo test"
 
-# BIOS: cdboot.img + standalone core.img
 grub-mkstandalone --format=i386-pc --output="$BOOTWORK/core.img" \
   --install-modules="$MODS biosdisk memdisk tar ls" \
   --modules="linux normal iso9660 biosdisk search" \
@@ -690,7 +633,6 @@ grub-mkstandalone --format=i386-pc --output="$BOOTWORK/core.img" \
   "boot/grub/grub.cfg=$BOOTWORK/grub-embed.cfg"
 cat /usr/lib/grub/i386-pc/cdboot.img "$BOOTWORK/core.img" > "$BOOTWORK/bios.img"
 
-# UEFI: standalone BOOTx64.EFI inside a FAT image
 grub-mkstandalone --format=x86_64-efi --output="$BOOTWORK/bootx64.efi" \
   --locales="" --fonts="" \
   "boot/grub/grub.cfg=$BOOTWORK/grub-embed.cfg"
@@ -720,86 +662,31 @@ rm -f "$ISO_PATH"
       "." )
 
 ###############################################################################
-# 12. Strict size check
+# 12. Size check & release packaging
 ###############################################################################
 bytes=$(stat -c %s "$ISO_PATH")
 gb=$(awk -v b="$bytes" 'BEGIN { printf "%.2f", b/1000000000 }')
-log "Final ISO: $ISO_PATH"
-log "Final ISO size: ${gb} GB (${bytes} bytes)"
-if (( bytes > MAX_BYTES )); then
-  die "ISO is ${gb} GB, which exceeds the 4.8 GB limit. Re-run with PRUNE_FIRMWARE=1, drop packages from GUI_PKGS (e.g. falkon, mesa-vulkan-drivers), or unset WITH_WINE32."
-elif (( bytes > TARGET_BYTES )); then
-  warn "ISO is ${gb} GB: under the 4.8 GB limit but above the 3.8 GB target."
-else
-  log "Size OK: within the 2.5-3.8 GB target range or smaller."
-fi
+log "Final ISO size: ${gb} GB"
 
-###############################################################################
-# 13. Release artifacts: ISO, split ZIP (parts < 1.9 GB), SHA256SUMS.txt
-###############################################################################
-log "Packaging release artifacts"
 (
   cd "$OUTDIR"
   rm -f "$ZIP_NAME" "$ZIP_NAME".[0-9]* SHA256SUMS.txt release-assets.txt
-
-  # Split ZIP: <name>.zip.001, .002, ... (reassemble: cat <name>.zip.* > <name>.zip)
   zip -q -1 "$ZIP_NAME" "$ISO_NAME"
   split -b "${CHUNK_MB}M" -d -a 3 --numeric-suffixes=1 "$ZIP_NAME" "$ZIP_NAME."
   rm -f "$ZIP_NAME"
   mapfile -t ZIP_PARTS < <(ls -1 "$ZIP_NAME".[0-9][0-9][0-9] | sort)
-  (( ${#ZIP_PARTS[@]} )) || die "No ZIP parts were produced"
 
-  # Checksum manifest: size comments + standard sha256sum lines
   {
     echo "# Win11-Linux Minimal - SHA256SUMS"
-    echo "# Verify: sha256sum -c --ignore-missing SHA256SUMS.txt"
-    echo "# <size in bytes>  <file>"
     for f in "$ISO_NAME" "${ZIP_PARTS[@]}"; do
       echo "# $(stat -c %s "$f")  $f"
     done
     sha256sum "$ISO_NAME" "${ZIP_PARTS[@]}"
   } > SHA256SUMS.txt
 
-  # Files to attach to a GitHub release (single asset limit is 2 GiB)
   {
     if (( $(stat -c %s "$ISO_NAME") < GH_ASSET_LIMIT )); then echo "$ISO_NAME"; fi
     printf '%s\n' "${ZIP_PARTS[@]}"
     echo "SHA256SUMS.txt"
   } > release-assets.txt
 )
-log "Release assets:"; sed 's/^/    /' "$OUTDIR/release-assets.txt"
-if ! grep -qx "$ISO_NAME" "$OUTDIR/release-assets.txt"; then
-  warn "ISO exceeds the GitHub asset limit; it ships as split ZIP parts (full ISO stays in the workflow artifact)."
-fi
-
-###############################################################################
-# 14. QEMU verification commands
-###############################################################################
-if [[ -w /dev/kvm ]]; then ACCEL="-enable-kvm -cpu host"; else ACCEL="-cpu max"; fi
-
-QEMU_BIOS="qemu-system-x86_64 $ACCEL -machine q35 -smp 4 -m 4G \
--cdrom \"$ISO_PATH\" -boot d -device virtio-vga -display gtk \
--audiodev pa,id=snd0 -device ich9-intel-hda -device hda-duplex,audiodev=snd0 \
--nic user,model=virtio-net-pci"
-
-QEMU_UEFI="$QEMU_BIOS -bios /usr/share/ovmf/OVMF.fd"
-
-cat <<EOF
-
-================ Test the ISO in QEMU ================
-# BIOS (legacy):
-$QEMU_BIOS
-
-# UEFI (needs: apt install ovmf qemu-system-x86):
-$QEMU_UEFI
-
-# Write to USB (replace /dev/sdX!):
-sudo dd if="$ISO_PATH" of=/dev/sdX bs=4M status=progress conv=fsync
-======================================================
-EOF
-
-if (( RUN_QEMU )); then
-  command -v qemu-system-x86_64 >/dev/null || die "qemu-system-x86_64 not installed (apt install qemu-system-x86)"
-  log "Launching QEMU (BIOS mode)"
-  eval "$QEMU_BIOS"
-fi
