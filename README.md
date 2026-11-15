@@ -2,7 +2,6 @@
 
 A lightweight, high-performance Windows 11 styled Linux OS built on Ubuntu 24.04 LTS.
 
-[![Build](https://github.com/isleepy20/build-mini-win11-linux.sh/actions/workflows/build.yml/badge.svg)](https://github.com/isleepy20/build-mini-win11-linux.sh/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Base OS](https://img.shields.io/badge/base-Ubuntu%2024.04%20LTS-E95420?logo=ubuntu&logoColor=white)
 
