@@ -1,0 +1,156 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - LICENSE
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  ISO_NAME: win11-linux-minimal.iso
+  ZIP_NAME: win11-linux-minimal.zip
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space and add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force || true
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile
+          sudo fallocate -l 8G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+          df -h /
+
+      - name: Build ISO, split ZIP and SHA256SUMS.txt
+        run: |
+          sudo WORKDIR="$PWD/work" OUTDIR="$PWD/out" ISO_NAME="$ISO_NAME" ZIP_NAME="$ZIP_NAME" \
+            bash build-mini-win11-linux.sh
+          sudo chown -R "$USER":"$USER" out
+          ls -lh out
+
+      - name: Upload full ISO as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: win11-linux-minimal
+          path: |
+            out/*.iso
+            out/SHA256SUMS.txt
+          compression-level: 0
+          retention-days: 14
+
+      - name: Render release notes and README table
+        if: github.ref == 'refs/heads/main'
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          TAG="v1.0.${{ github.run_number }}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          export TAG
+          python3 - <<'PY'
+          import os, re, pathlib
+
+          repo, tag, iso = os.environ["REPO"], os.environ["TAG"], os.environ["ISO_NAME"]
+          out = pathlib.Path("out")
+          assets = [l.strip() for l in (out / "release-assets.txt").read_text().splitlines() if l.strip()]
+          sizes, sums = {}, {}
+          for line in (out / "SHA256SUMS.txt").read_text().splitlines():
+              if line.startswith("#"):
+                  m = re.match(r"#\s+(\d+)\s+(\S+)$", line)
+                  if m:
+                      sizes[m.group(2)] = int(m.group(1))
+              elif line.strip():
+                  h, f = line.split(None, 1)
+                  sums[f.strip().lstrip("*")] = h
+
+          def fmt(n):
+              return f"{n / 2**30:.2f} GiB" if n >= 2**30 else f"{n / 2**20:.1f} MiB"
+
+          base = f"https://github.com/{repo}/releases/download/{tag}"
+          zip_parts = [a for a in assets if re.search(r"\.zip\.\d{3}$", a)]
+          rows = ["| Asset | Description | Size | SHA-256 |", "|---|---|---|---|"]
+
+          if iso in assets:
+              rows.append(f"| [`{iso}`]({base}/{iso}) | Bootable hybrid BIOS/UEFI ISO | {fmt(sizes[iso])} | `{sums[iso][:16]}…` |")
+          else:
+              rows.append(f"| `{iso}` | Bootable ISO (over GitHub's 2 GiB asset limit, shipped as the ZIP parts below) | {fmt(sizes[iso])} | `{sums[iso][:16]}…` |")
+          for i, part in enumerate(zip_parts, 1):
+              rows.append(f"| [`{part}`]({base}/{part}) | Compressed archive, part {i} of {len(zip_parts)} | {fmt(sizes[part])} | `{sums[part][:16]}…` |")
+          sz = (out / "SHA256SUMS.txt").stat().st_size
+          rows.append(f"| [`SHA256SUMS.txt`]({base}/SHA256SUMS.txt) | Checksums and exact sizes | {sz} B | n/a |")
+          table = "\n".join(rows)
+
+          zip_base = os.environ["ZIP_NAME"]
+          how = (
+              f"Release **{tag}**. Download every `{zip_base}.NNN` part, then:\n\n"
+              f"```bash\ncat {zip_base}.* > {zip_base} && unzip {zip_base}\n"
+              f"sha256sum -c --ignore-missing SHA256SUMS.txt\n```"
+          )
+          block = f"<!-- RELEASE:START -->\n{table}\n\n{how}\n<!-- RELEASE:END -->"
+
+          readme = pathlib.Path("README.md")
+          text = readme.read_text()
+          text = re.sub(r"<!-- RELEASE:START -->.*?<!-- RELEASE:END -->", lambda m: block, text, flags=re.S)
+          readme.write_text(text)
+          (out / "release-notes.md").write_text(f"## Win11-Linux Minimal {tag}\n\n{table}\n\n{how}\n")
+          PY
+
+      - name: Publish GitHub release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd out
+          mapfile -t ASSETS < release-assets.txt
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+            gh release edit "$TAG" --notes-file release-notes.md
+          else
+            gh release create "$TAG" "${ASSETS[@]}" \
+              --title "Win11-Linux Minimal $TAG" \
+              --notes-file release-notes.md \
+              --target "$GITHUB_SHA" --latest
+          fi
+
+      - name: Update repository About and topics
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        env:
+          # GITHUB_TOKEN cannot edit repo metadata; add a PAT with repo admin as secret REPO_ADMIN_TOKEN.
+          GH_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN || github.token }}
+        run: |
+          gh repo edit "$GITHUB_REPOSITORY" \
+            --description "A lightweight, high-performance Windows 11 styled Linux OS built on Ubuntu 24.04 LTS" \
+            --homepage "https://github.com/$GITHUB_REPOSITORY/releases/latest" \
+            --add-topic linux,iso,windows-11,ubuntu,kde-plasma,qemu
+
+      - name: Commit README with latest assets
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --cached --quiet; then
+            echo "README unchanged"
+          else
+            git commit -m "docs: update release assets for $TAG [skip ci]"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
