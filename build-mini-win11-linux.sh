@@ -236,6 +236,14 @@ chroot_sh apt-get update
 ###############################################################################
 # 4. Core Linux system, live-boot scripts, kernel
 ###############################################################################
+log "Pre-creating systemd users and groups to prevent sysusers.d failure"
+chroot_sh groupadd -g 102 systemd-journal 2>/dev/null || true
+chroot_sh useradd -u 102 -g systemd-journal -d / -s /usr/sbin/nologin systemd-journal 2>/dev/null || true
+chroot_sh groupadd -g 100 systemd-network 2>/dev/null || true
+chroot_sh useradd -u 100 -g systemd-network -d / -s /usr/sbin/nologin systemd-network 2>/dev/null || true
+chroot_sh groupadd -g 103 systemd-resolve 2>/dev/null || true
+chroot_sh useradd -u 103 -g systemd-resolve -d / -s /usr/sbin/nologin systemd-resolve 2>/dev/null || true
+
 log "Installing core system and casper"
 CORE_PKGS=(
   systemd systemd-sysv systemd-resolved systemd-timesyncd udev kmod
