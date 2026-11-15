@@ -6,9 +6,6 @@
 # 24.04 LTS (noble) debootstrap, with a minimal KDE Plasma desktop restyled to
 # look like Windows 11, plus Wine, Flatpak and the standard Linux services.
 #
-# Run as root on an Ubuntu/Debian host with ~25 GB free disk and network:
-#     sudo ./build-mini-win11-linux.sh [--run-qemu]
-#
 set -euo pipefail
 
 ###############################################################################
@@ -161,7 +158,7 @@ printf '#!/bin/sh\nexit 101\n' > "$ROOTFS/usr/sbin/policy-rc.d"
 chmod +x "$ROOTFS/usr/sbin/policy-rc.d"
 
 ###############################################################################
-# 3. APT / dpkg configuration (Purge deb822 sources.list.d overrides)
+# 3. APT / dpkg configuration
 ###############################################################################
 log "Configuring apt and dpkg for minimal size"
 rm -rf "$ROOTFS/etc/apt/sources.list.d/"*
@@ -211,21 +208,15 @@ printf 'XKBMODEL="pc105"\nXKBLAYOUT="us"\nXKBVARIANT=""\nXKBOPTIONS=""\n' > "$RO
 chroot_sh apt-get update
 
 ###############################################################################
-# 4. Pre-create systemd users/groups & install core system safely
+# 4. Pre-create systemd users/groups & install core system
 ###############################################################################
-log "Pre-creating systemd users and groups to prevent sysusers failure"
+log "Pre-creating systemd users and groups"
 chroot_sh groupadd -g 102 systemd-journal 2>/dev/null || true
 chroot_sh useradd -u 102 -g systemd-journal -d / -s /usr/sbin/nologin systemd-journal 2>/dev/null || true
 chroot_sh groupadd -g 100 systemd-network 2>/dev/null || true
 chroot_sh useradd -u 100 -g systemd-network -d / -s /usr/sbin/nologin systemd-network 2>/dev/null || true
 chroot_sh groupadd -g 103 systemd-resolve 2>/dev/null || true
 chroot_sh useradd -u 103 -g systemd-resolve -d / -s /usr/sbin/nologin systemd-resolve 2>/dev/null || true
-chroot_sh groupadd -g 104 systemd-timesync 2>/dev/null || true
-chroot_sh useradd -u 104 -g systemd-timesync -d / -s /usr/sbin/nologin systemd-timesync 2>/dev/null || true
-
-# Ensure policy-rc.d is active so systemctl never attempts to talk to PID 1 during apt install
-printf '#!/bin/sh\nexit 101\n' > "$ROOTFS/usr/sbin/policy-rc.d"
-chmod +x "$ROOTFS/usr/sbin/policy-rc.d"
 
 log "Installing core system and casper"
 CORE_PKGS=(
@@ -565,10 +556,11 @@ exit 0
 STAGE_EOF
 chroot_sh PRUNE_FIRMWARE="$PRUNE_FIRMWARE" bash /tmp/slim.sh
 
+# Kernel + initrd go next to the squashfs on the ISO (Fixed capitalization here)
 VMLINUZ="$(ls -1 "$ROOTFS"/boot/vmlinuz-* | sort -V | tail -1)"
 INITRD="$(ls -1 "$ROOTFS"/boot/initrd.img-* | sort -V | tail -1)"
 [[ -f "$VMLINUZ" && -f "$INITRD" ]] || die "Kernel/initrd not found in chroot /boot"
-cp "$VMLINuz" "$ISODIR/casper/vmlinuz"
+cp "$VMLINUZ" "$ISODIR/casper/vmlinuz"
 cp "$INITRD"  "$ISODIR/casper/initrd"
 chmod 644 "$ISODIR/casper/vmlinuz" "$ISODIR/casper/initrd"
 
