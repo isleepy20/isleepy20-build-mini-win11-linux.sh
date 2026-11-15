@@ -165,7 +165,7 @@ KEYRING_OPT=()
 [[ -f /usr/share/keyrings/ubuntu-archive-keyring.gpg ]] && \
   KEYRING_OPT=(--keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg)
 
-debootstrap --arch="$ARCH" --variant=minbase --components=main,universe \
+debootstrap --arch="$ARCH" --variant=minbase --components=main,universe,restricted,multiverse \
   "${KEYRING_OPT[@]}" \
   --include=ca-certificates,gnupg,locales,apt-utils \
   "$RELEASE" "$ROOTFS" "$MIRROR"
@@ -188,17 +188,15 @@ chmod +x "$ROOTFS/usr/sbin/policy-rc.d"
 ###############################################################################
 log "Configuring apt and dpkg for minimal size"
 rm -f "$ROOTFS/etc/apt/sources.list.d/ubuntu.sources"
+cat > "$ROOTFS/etc/resolv.conf" <<EOF
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+EOF
+
 cat > "$ROOTFS/etc/apt/sources.list" <<EOF
 deb $MIRROR $RELEASE main restricted universe multiverse
 deb $MIRROR $RELEASE-updates main restricted universe multiverse
 deb $SEC_MIRROR $RELEASE-security main restricted universe multiverse
-EOF
-
-cat > "$ROOTFS/etc/apt/apt.conf.d/99-mini" <<'EOF'
-APT::Install-Recommends "false";
-APT::Install-Suggests "false";
-Acquire::Languages "none";
-Acquire::GzipIndexes "true";
 EOF
 
 cat > "$ROOTFS/etc/apt/preferences.d/no-snap.pref" <<'EOF'
@@ -276,6 +274,7 @@ EOF
 ###############################################################################
 log "Installing minimal KDE Plasma"
 chroot_sh bash -c 'echo "sddm shared/default-x-display-manager select sddm" | debconf-set-selections'
+chroot_sh apt-get update
 
 GUI_PKGS=(
   xserver-xorg xserver-xorg-input-libinput xserver-xorg-video-fbdev
