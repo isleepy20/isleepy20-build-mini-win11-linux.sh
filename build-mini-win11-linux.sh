@@ -10,16 +10,16 @@
 #     sudo ./build-mini-win11-linux.sh [--run-qemu]
 #
 # Optional environment variables:
-#     WORKDIR=<dir>          work directory            (default: ./mini-win11-build)
-#     OUTDIR=<dir>           where the .iso is written (default: .)
-#     ISO_NAME=<file>        output ISO name           (default: win11-linux-minimal.iso)
-#     ZIP_NAME=<file>        split ZIP base name       (default: ISO_NAME with .zip)
-#     CHUNK_MB=1800          ZIP volume size in MiB    (< 1.9 GB per part)
-#     MIRROR / SEC_MIRROR    Ubuntu mirrors
-#     WITH_WINE32=1          add i386 multiarch + wine32 (+~300 MB)
-#     PRUNE_FIRMWARE=0       keep all of linux-firmware (+~150-250 MB)
-#     THEME_KDE_REPO / THEME_ICON_REPO   theme git repos (pin a commit/fork for
-#                            reproducible builds; upstream layout may change)
+#     WORKDIR=<dir>         work directory             (default: ./mini-win11-build)
+#     OUTDIR=<dir>          where the .iso is written (default: .)
+#     ISO_NAME=<file>       output ISO name            (default: win11-linux-minimal.iso)
+#     ZIP_NAME=<file>       split ZIP base name        (default: ISO_NAME with .zip)
+#     CHUNK_MB=1800         ZIP volume size in MiB     (< 1.9 GB per part)
+#     MIRROR / SEC_MIRROR   Ubuntu mirrors
+#     WITH_WINE32=1         add i386 multiarch + wine32 (+~300 MB)
+#     PRUNE_FIRMWARE=0      keep all of linux-firmware (+~150-250 MB)
+#     THEME_KDE_REPO / THEME_ICON_REPO    theme git repos (pin a commit/fork for
+#                           reproducible builds; upstream layout may change)
 #
 # Notes:
 #   * Uses linux-image-generic + linux-modules-extra + linux-firmware instead of
@@ -44,7 +44,7 @@ OUTDIR="${OUTDIR:-$PWD}"
 ISO_NAME="${ISO_NAME:-win11-linux-minimal.iso}"
 ZIP_NAME="${ZIP_NAME:-${ISO_NAME%.iso}.zip}"
 CHUNK_MB="${CHUNK_MB:-1800}"             # 1800 MiB = ~1.89 GB per part
-GH_ASSET_LIMIT=2000000000                # raw ISO is only a release asset if below this
+GH_ASSET_LIMIT=2000000000               # raw ISO is only a release asset if below this
 VOLID="WIN11_LINUX"
 
 LIVE_USER="win11"
@@ -188,15 +188,17 @@ chmod +x "$ROOTFS/usr/sbin/policy-rc.d"
 ###############################################################################
 log "Configuring apt and dpkg for minimal size"
 rm -f "$ROOTFS/etc/apt/sources.list.d/ubuntu.sources"
-cat > "$ROOTFS/etc/resolv.conf" <<EOF
-nameserver 1.1.1.1
-nameserver 8.8.8.8
-EOF
-
 cat > "$ROOTFS/etc/apt/sources.list" <<EOF
 deb $MIRROR $RELEASE main restricted universe multiverse
 deb $MIRROR $RELEASE-updates main restricted universe multiverse
 deb $SEC_MIRROR $RELEASE-security main restricted universe multiverse
+EOF
+
+cat > "$ROOTFS/etc/apt/apt.conf.d/99-mini" <<'EOF'
+APT::Install-Recommends "false";
+APT::Install-Suggests "false";
+Acquire::Languages "none";
+Acquire::GzipIndexes "true";
 EOF
 
 cat > "$ROOTFS/etc/apt/preferences.d/no-snap.pref" <<'EOF'
@@ -340,11 +342,11 @@ if [ -d "$ICO" ]; then
 fi
 
 if [ -d "$KDE" ]; then
-  cp_tree "$KDE/aurorae/themes"        /usr/share/aurorae/themes   || cp_tree "$KDE/aurorae" /usr/share/aurorae/themes
+  cp_tree "$KDE/aurorae/themes"        /usr/share/aurorae/themes    || cp_tree "$KDE/aurorae" /usr/share/aurorae/themes
   cp_tree "$KDE/color-schemes"         /usr/share/color-schemes
   cp_tree "$KDE/plasma/desktoptheme"   /usr/share/plasma/desktoptheme
   cp_tree "$KDE/plasma/look-and-feel"  /usr/share/plasma/look-and-feel
-  cp_tree "$KDE/sddm/themes"           /usr/share/sddm/themes      || cp_tree "$KDE/sddm" /usr/share/sddm/themes
+  cp_tree "$KDE/sddm/themes"           /usr/share/sddm/themes       || cp_tree "$KDE/sddm" /usr/share/sddm/themes
   cp_tree "$KDE/Kvantum"               /usr/share/Kvantum
   cp_tree "$KDE/wallpapers"            /usr/share/backgrounds/win11 || cp_tree "$KDE/wallpaper" /usr/share/backgrounds/win11
 fi
@@ -504,7 +506,7 @@ pad.currentConfigGroup = ["General"];
 pad.writeConfig("expanding", false);
 pad.writeConfig("length", 200);
 
-panel.addWidget("org.kde.plasma.panelspacer");          /* expanding left  */
+panel.addWidget("org.kde.plasma.panelspacer");         /* expanding left  */
 
 var start = panel.addWidget("org.kde.plasma.kickoff");  /* Start button    */
 start.currentConfigGroup = ["General"];
@@ -515,7 +517,7 @@ tasks.currentConfigGroup = ["General"];
 tasks.writeConfig("launchers",
   "preferred://filemanager,preferred://browser,applications:org.kde.konsole.desktop,applications:org.kde.discover.desktop");
 
-panel.addWidget("org.kde.plasma.panelspacer");          /* expanding right */
+panel.addWidget("org.kde.plasma.panelspacer");         /* expanding right */
 
 panel.addWidget("org.kde.plasma.systemtray");
 panel.addWidget("org.kde.plasma.digitalclock");
