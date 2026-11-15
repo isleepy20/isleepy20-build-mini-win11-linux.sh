@@ -211,15 +211,21 @@ printf 'XKBMODEL="pc105"\nXKBLAYOUT="us"\nXKBVARIANT=""\nXKBOPTIONS=""\n' > "$RO
 chroot_sh apt-get update
 
 ###############################################################################
-# 4. Pre-create systemd users/groups & install core system
+# 4. Pre-create systemd users/groups & install core system safely
 ###############################################################################
-log "Pre-creating systemd users and groups"
+log "Pre-creating systemd users and groups to prevent sysusers failure"
 chroot_sh groupadd -g 102 systemd-journal 2>/dev/null || true
 chroot_sh useradd -u 102 -g systemd-journal -d / -s /usr/sbin/nologin systemd-journal 2>/dev/null || true
 chroot_sh groupadd -g 100 systemd-network 2>/dev/null || true
 chroot_sh useradd -u 100 -g systemd-network -d / -s /usr/sbin/nologin systemd-network 2>/dev/null || true
 chroot_sh groupadd -g 103 systemd-resolve 2>/dev/null || true
 chroot_sh useradd -u 103 -g systemd-resolve -d / -s /usr/sbin/nologin systemd-resolve 2>/dev/null || true
+chroot_sh groupadd -g 104 systemd-timesync 2>/dev/null || true
+chroot_sh useradd -u 104 -g systemd-timesync -d / -s /usr/sbin/nologin systemd-timesync 2>/dev/null || true
+
+# Ensure policy-rc.d is active so systemctl never attempts to talk to PID 1 during apt install
+printf '#!/bin/sh\nexit 101\n' > "$ROOTFS/usr/sbin/policy-rc.d"
+chmod +x "$ROOTFS/usr/sbin/policy-rc.d"
 
 log "Installing core system and casper"
 CORE_PKGS=(
