@@ -10,8 +10,8 @@ A lightweight, high-performance Windows 11 styled Linux OS built on Ubuntu 24.04
 <!-- RELEASE:START -->
 | Asset | Description | Size | SHA-256 |
 |---|---|---|---|
-| [`win11-linux-minimal.iso`](https://github.com/isleepy20/build-mini-win11-linux.sh/releases/download/v1.0.7/win11-linux-minimal.iso) | Bootable hybrid BIOS/UEFI ISO | 1.37 GiB | `e990354173433d80…` |
-| [`win11-linux-minimal.zip.001`](https://github.com/isleepy20/build-mini-win11-linux.sh/releases/download/v1.0.7/win11-linux-minimal.zip.001) | Compressed archive, part 1 of 1 | 1.34 GiB | `be4a5c82ebfcd9e8…` |
+| [`win11-linux-minimal.iso`](https://github.com/isleepy20/build-mini-win11-linux.sh/releases/download/v1.0.7/win11-linux-minimal.iso) | Bootable hybrid BIOS/UEFI ISO | 	669.2 MiB | `e990354173433d80…` |
+| [`win11-linux-minimal.zip.001`](https://github.com/isleepy20/build-mini-win11-linux.sh/releases/download/v1.0.7/win11-linux-minimal.zip.001) | Compressed archive, part 1 of 1 | 	669.5 MiB | `be4a5c82ebfcd9e8…` |
 | [`SHA256SUMS.txt`](https://github.com/isleepy20/build-mini-win11-linux.sh/releases/download/v1.0.7/SHA256SUMS.txt) | Checksums and exact sizes | 299 B | n/a |
 
 Release **v1.0.7**. Download every `win11-linux-minimal.zip.NNN` part, then:
