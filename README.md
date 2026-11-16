@@ -12,20 +12,18 @@ A lightweight, high-performance customized live Linux distribution featuring an 
 
 ## 📦 Download & Release Assets
 
-The table below is automatically updated with the latest build artifacts and checksums whenever a release is published:
+The latest build artifacts, split archives, and checksums are available below:
 
 <!-- RELEASE:START -->
 | Asset | Description | Size | SHA-256 |
 |---|---|---|---|
-| [`win11-linux-minimal.iso`](https://github.com/isleepy20/isleepy20-my-arch-win11-iso/releases/download/v1.0.1/win11-linux-minimal.iso) | Bootable hybrid BIOS/UEFI ISO | 850.0 MiB | `a1b2c3d4e5f6g7h8…` |
-| [`SHA256SUMS.txt`](https://github.com/isleepy20/isleepy20-my-arch-win11-iso/releases/download/v1.0.1/SHA256SUMS.txt) | Checksums and exact sizes | 142 B | n/a |
+| [`win11-linux-minimal.iso`](https://github.com/isleepy20/isleepy20-my-arch-win11-iso/releases/latest/download/win11-linux-minimal.iso) | Bootable hybrid BIOS/UEFI ISO | ~850 MiB | *See checksums* |
+| [`win11-linux-minimal.zip.001`](https://github.com/isleepy20/isleepy20-my-arch-win11-iso/releases/latest/download/win11-linux-minimal.zip.001) | Split compressed archive (Part 1) | ~1.8 GiB | *See checksums* |
+| [`SHA256SUMS.txt`](https://github.com/isleepy20/isleepy20-my-arch-win11-iso/releases/latest/download/SHA256SUMS.txt) | Checksums and exact sizes | 142 B | n/a |
 <!-- RELEASE:END -->
 
----
+Release **v1.0** (or your latest workflow run). If you downloaded the split zip parts, combine and verify them using:
 
-## 🚀 How to Verify and Use
-
-1. Download the ISO artifact directly from the [Releases page](https://github.com/isleepy20/isleepy20-my-arch-win11-iso/releases).
-2. Verify the download integrity using the checksum file:
-   ```bash
-   sha256sum -c --ignore-missing SHA256SUMS.txt
+```bash
+cat win11-linux-minimal.zip.* > win11-linux-minimal.zip && unzip win11-linux-minimal.zip
+sha256sum -c --ignore-missing SHA256SUMS.txt
