@@ -735,7 +735,7 @@ EOF
 sed -i 's/^ENABLED=.*/ENABLED=yes/' "$ROOTFS/etc/ufw/ufw.conf"
 sed -i 's/^DEFAULT_INPUT_POLICY=.*/DEFAULT_INPUT_POLICY="DROP"/' "$ROOTFS/etc/default/ufw"
 
-if [[ "$PROFILE" == "lite" ]]; then DM_UNITS="lightdm"; else DM_UNITS="sddm cups"; fi
+if [[ "$PROFILE" == "lite" ]]; then DM_UNITS="lightdm"; else DM_UNunits="sddm cups"; fi
 chroot_sh systemctl enable NetworkManager systemd-resolved systemd-timesyncd \
   bluetooth ssh ufw $DM_UNITS
 chroot_sh systemctl set-default graphical.target
