@@ -3,8 +3,14 @@
 # build-mini-win11-linux.sh
 #
 # Builds a bootable hybrid BIOS/UEFI live ISO (< 5 GB) from a minimal Ubuntu
-# 24.04 LTS (noble) debootstrap, with a minimal KDE Plasma desktop restyled to
-# look like Windows 11, plus Wine, Flatpak and the standard Linux services.
+# 24.04 LTS (noble) debootstrap, with an XFCE lightweight desktop restyled to
+# look like Windows 11, plus Wine, Flatpak and standard Linux services.
+#
+#   PROFILE=lite  (default)  XFCE desktop, virtual kernel, zstd SquashFS,
+#                            zram swap. Optimized to boot under 1 GB RAM
+#                            for QEMU / Vectras VM / Limbo / VirtualBox.
+#   PROFILE=kde              KDE Plasma desktop, generic kernel + firmware,
+#                            xz SquashFS. Needs 3-4 GB RAM.
 #
 set -euo pipefail
 
@@ -27,9 +33,18 @@ VOLID="WIN11_LINUX"
 LIVE_USER="win11"
 LIVE_HOSTNAME="win11-linux"
 
+PROFILE="${PROFILE:-lite}"
+case "$PROFILE" in lite|kde) ;; *) echo "PROFILE must be lite or kde" >&2; exit 1 ;; esac
+WITH_FIRMWARE="${WITH_FIRMWARE:-0}"
+WITH_WINE="${WITH_WINE:-1}"
+WITH_BROWSER="${WITH_BROWSER:-1}"
 WITH_WINE32="${WITH_WINE32:-0}"
 PRUNE_FIRMWARE="${PRUNE_FIRMWARE:-1}"
+COMPOSITOR="${COMPOSITOR:-0}"
+if [[ "$PROFILE" == "lite" ]]; then SQUASH_COMP="${SQUASH_COMP:-zstd}"; else SQUASH_COMP="${SQUASH_COMP:-xz}"; fi
+
 THEME_KDE_REPO="${THEME_KDE_REPO:-https://github.com/yeyushengfan258/Win11OS-kde.git}"
+THEME_GTK_REPO="${THEME_GTK_REPO:-https://github.com/vinceliuice/Fluent-gtk-theme.git}"
 THEME_ICON_REPO="${THEME_ICON_REPO:-https://github.com/yeyushengfan258/Win11-icon-theme.git}"
 
 MAX_BYTES=4800000000
@@ -130,8 +145,12 @@ fetch_repo() {
   fi
 }
 log "Fetching Windows 11 theme sources"
-fetch_repo "$THEME_KDE_REPO"  "$SRCDIR/Win11OS-kde"
 fetch_repo "$THEME_ICON_REPO" "$SRCDIR/Win11-icon-theme"
+if [[ "$PROFILE" == "kde" ]]; then
+  fetch_repo "$THEME_KDE_REPO" "$SRCDIR/Win11OS-kde"
+else
+  fetch_repo "$THEME_GTK_REPO" "$SRCDIR/Fluent-gtk-theme"
+fi
 
 ###############################################################################
 # 2. Bootstrap minimal Ubuntu 24.04
@@ -219,18 +238,33 @@ chroot_sh groupadd -g 103 systemd-resolve 2>/dev/null || true
 chroot_sh useradd -u 103 -g systemd-resolve -d / -s /usr/sbin/nologin systemd-resolve 2>/dev/null || true
 
 log "Installing core system and casper"
-CORE_PKGS=(
-  systemd systemd-sysv systemd-resolved systemd-timesyncd udev kmod
-  dbus dbus-user-session dbus-x11 sudo polkitd pkexec
-  iproute2 iputils-ping curl wget ca-certificates less nano file unzip xz-utils zstd
-  network-manager wpasupplicant iw wireless-regdb
-  pipewire pipewire-pulse pipewire-alsa wireplumber libspa-0.2-bluetooth alsa-utils
-  bluez cups ufw openssh-server
-  locales tzdata keyboard-configuration kbd
-  xdg-user-dirs xdg-utils
-  ntfs-3g exfatprogs dosfstools e2fsprogs
-  initramfs-tools casper
-)
+if [[ "$PROFILE" == "lite" ]]; then
+  CORE_PKGS=(
+    systemd systemd-sysv systemd-resolved systemd-timesyncd libpam-systemd udev kmod
+    dbus dbus-user-session dbus-x11 sudo polkitd pkexec upower udisks2
+    iproute2 iputils-ping curl wget ca-certificates less nano file unzip xz-utils zstd
+    network-manager wpasupplicant iw wireless-regdb
+    pipewire pipewire-pulse pipewire-alsa wireplumber alsa-utils
+    bluez ufw openssh-server systemd-zram-generator
+    locales tzdata keyboard-configuration kbd
+    xdg-user-dirs xdg-utils
+    ntfs-3g exfatprogs dosfstools e2fsprogs
+    initramfs-tools casper
+  )
+else
+  CORE_PKGS=(
+    systemd systemd-sysv systemd-resolved systemd-timesyncd udev kmod
+    dbus dbus-user-session dbus-x11 sudo polkitd pkexec
+    iproute2 iputils-ping curl wget ca-certificates less nano file unzip xz-utils zstd
+    network-manager wpasupplicant iw wireless-regdb
+    pipewire pipewire-pulse pipewire-alsa wireplumber libspa-0.2-bluetooth alsa-utils
+    bluez cups ufw openssh-server
+    locales tzdata keyboard-configuration kbd
+    xdg-user-dirs xdg-utils
+    ntfs-3g exfatprogs dosfstools e2fsprogs
+    initramfs-tools casper
+  )
+fi
 apt_install "${CORE_PKGS[@]}"
 
 log "Generating en_US.UTF-8 locale only"
@@ -240,7 +274,13 @@ chroot_sh update-locale LANG=en_US.UTF-8
 
 log "Installing kernel and firmware"
 echo 'RESUME=none' > "$ROOTFS/etc/initramfs-tools/conf.d/resume"
-apt_install linux-image-generic linux-firmware
+if [[ "$PROFILE" == "lite" ]]; then
+  apt_install linux-image-virtual
+  if [[ "$WITH_FIRMWARE" == "1" ]]; then apt_install linux-firmware; fi
+else
+  apt_install linux-image-generic linux-firmware
+fi
+
 KVER="$(chroot_sh bash -c 'ls /lib/modules | sort -V | tail -1')"
 [[ -n "$KVER" ]] || die "No kernel installed in chroot"
 apt_install "linux-modules-extra-$KVER" || warn "linux-modules-extra-$KVER unavailable; continuing"
@@ -254,40 +294,63 @@ export FLAVOUR="Mini-Win11-Linux"
 EOF
 
 ###############################################################################
-# 5. Minimal KDE Plasma desktop
+# 5. Desktop environment (KDE for PC, XFCE for Lite)
 ###############################################################################
-log "Installing minimal KDE Plasma"
-chroot_sh bash -c 'echo "sddm shared/default-x-display-manager select sddm" | debconf-set-selections'
-chroot_sh apt-get update
+if [[ "$PROFILE" == "lite" ]]; then
+  log "Installing XFCE desktop (lite profile)"
+  chroot_sh bash -c 'echo "lightdm shared/default-x-display-manager select lightdm" | debconf-set-selections'
+  chroot_sh apt-get update
 
-GUI_PKGS=(
-  xserver-xorg xserver-xorg-input-libinput xserver-xorg-video-fbdev
-  xserver-xorg-video-vesa x11-xserver-utils xauth
-  libgl1-mesa-dri libglx-mesa0 libegl-mesa0 mesa-vulkan-drivers libvulkan1
-  plasma-desktop plasma-workspace plasma-workspace-wayland kwin-x11 kwin-wayland
-  sddm sddm-theme-breeze kde-config-sddm
-  breeze breeze-icon-theme breeze-gtk-theme kde-config-gtk-style
-  systemsettings kscreen plasma-nm plasma-pa powerdevil bluedevil print-manager
-  plasma-discover plasma-discover-backend-flatpak plasma-systemmonitor
-  xdg-desktop-portal xdg-desktop-portal-kde xdg-desktop-portal-gtk
-  dolphin kio-extras ark gwenview konsole falkon
-  libkf5config-bin qt5-style-kvantum
-  qml-module-qtquick-controls qml-module-qtquick-controls2 qml-module-qtquick-layouts
-  qml-module-qtgraphicaleffects libqt5svg5
-  fonts-inter fonts-noto-core fonts-noto-color-emoji
-)
-apt_install "${GUI_PKGS[@]}"
+  GUI_PKGS=(
+    xserver-xorg-core xserver-xorg-input-libinput xserver-xorg-video-fbdev
+    xserver-xorg-video-vesa xserver-xorg-video-qxl xserver-xorg-video-vmware
+    x11-xserver-utils xauth libgl1-mesa-dri libglx-mesa0
+    xfce4-session xfwm4 xfce4-panel xfdesktop4 xfce4-settings xfconf xfce4-appfinder
+    thunar thunar-volman tumbler xfce4-terminal xfce4-whiskermenu-plugin
+    xfce4-pulseaudio-plugin xfce4-notifyd xfce4-taskmanager
+    mousepad ristretto xarchiver network-manager-gnome policykit-1-gnome
+    gvfs gvfs-daemons lightdm lightdm-gtk-greeter
+    adwaita-icon-theme gtk2-engines-murrine librsvg2-common
+    fonts-inter fonts-noto-core xdg-desktop-portal-gtk
+  )
+  if [[ "$WITH_BROWSER" == "1" ]]; then GUI_PKGS+=(epiphany-browser); fi
+  apt_install "${GUI_PKGS[@]}"
+else
+  log "Installing minimal KDE Plasma"
+  chroot_sh bash -c 'echo "sddm shared/default-x-display-manager select sddm" | debconf-set-selections'
+  chroot_sh apt-get update
+
+  GUI_PKGS=(
+    xserver-xorg xserver-xorg-input-libinput xserver-xorg-video-fbdev
+    xserver-xorg-video-vesa x11-xserver-utils xauth
+    libgl1-mesa-dri libglx-mesa0 libegl-mesa0 mesa-vulkan-drivers libvulkan1
+    plasma-desktop plasma-workspace plasma-workspace-wayland kwin-x11 kwin-wayland
+    sddm sddm-theme-breeze kde-config-sddm
+    breeze breeze-icon-theme breeze-gtk-theme kde-config-gtk-style
+    systemsettings kscreen plasma-nm plasma-pa powerdevil bluedevil print-manager
+    plasma-discover plasma-discover-backend-flatpak plasma-systemmonitor
+    xdg-desktop-portal xdg-desktop-portal-kde xdg-desktop-portal-gtk
+    dolphin kio-extras ark gwenview konsole falkon
+    libkf5config-bin qt5-style-kvantum
+    qml-module-qtquick-controls qml-module-qtquick-controls2 qml-module-qtquick-layouts
+    qml-module-qtgraphicaleffects libqt5svg5
+    fonts-inter fonts-noto-core fonts-noto-color-emoji
+  )
+  apt_install "${GUI_PKGS[@]}"
+fi
 
 ###############################################################################
 # 6. Wine and Flatpak
 ###############################################################################
 log "Installing Wine and Flatpak"
-if [[ "$WITH_WINE32" == "1" ]]; then
-  chroot_sh dpkg --add-architecture i386
-  chroot_sh apt-get update
-  apt_install wine wine64 libwine fonts-wine wine32:i386 libwine:i386
-else
-  apt_install wine wine64 libwine fonts-wine
+if [[ "$WITH_WINE" == "1" ]]; then
+  if [[ "$WITH_WINE32" == "1" ]]; then
+    chroot_sh dpkg --add-architecture i386
+    chroot_sh apt-get update
+    apt_install wine wine64 libwine fonts-wine wine32:i386 libwine:i386
+  else
+    apt_install wine wine64 libwine fonts-wine
+  fi
 fi
 apt_install flatpak
 
@@ -301,11 +364,12 @@ curl -fsSL https://dl.flathub.org/repo/flathub.flatpakrepo \
 ###############################################################################
 log "Installing Windows 11 themes"
 mkdir -p "$ROOTFS/tmp/themes"
-for d in Win11OS-kde Win11-icon-theme; do
+for d in Win11OS-kde Fluent-gtk-theme Win11-icon-theme; do
   [[ -d "$SRCDIR/$d" ]] && cp -a "$SRCDIR/$d" "$ROOTFS/tmp/themes/$d"
 done
 
-cat > "$ROOTFS/tmp/install-themes.sh" <<'STAGE_EOF'
+if [[ "$PROFILE" == "kde" ]]; then
+  cat > "$ROOTFS/tmp/install-themes.sh" <<'STAGE_EOF'
 #!/bin/bash
 set -u
 T=/tmp/themes
@@ -334,9 +398,29 @@ fi
 gtk-update-icon-cache -f /usr/share/icons/Win11 >/dev/null 2>&1 || true
 exit 0
 STAGE_EOF
-chroot_sh bash /tmp/install-themes.sh || true
+  chroot_sh bash /tmp/install-themes.sh || true
+else
+  cat > "$ROOTFS/tmp/install-themes.sh" <<'STAGE_EOF'
+#!/bin/bash
+set -u
+T=/tmp/themes
+if [ -d "$T/Fluent-gtk-theme" ]; then
+  ( cd "$T/Fluent-gtk-theme" && bash ./install.sh -d /usr/share/themes -c light ) >/tmp/gtk-install.log 2>&1 \
+  || ( cd "$T/Fluent-gtk-theme" && bash ./install.sh -d /usr/share/themes ) >>/tmp/gtk-install.log 2>&1 \
+  || ( cd "$T/Fluent-gtk-theme" && bash ./install.sh ) >>/tmp/gtk-install.log 2>&1 || true
+fi
+if [ -d "$T/Win11-icon-theme" ]; then
+  ( cd "$T/Win11-icon-theme" && bash ./install.sh -d /usr/share/icons ) >/tmp/icon-install.log 2>&1 \
+  || ( cd "$T/Win11-icon-theme" && bash ./install.sh ) >>/tmp/icon-install.log 2>&1 || true
+fi
+gtk-update-icon-cache -f /usr/share/icons/Win11 >/dev/null 2>&1 || true
+exit 0
+STAGE_EOF
+  chroot_sh bash /tmp/install-themes.sh || true
+fi
 
-cat > "$ROOTFS/tmp/configure-desktop.sh" <<'STAGE_EOF'
+if [[ "$PROFILE" == "kde" ]]; then
+  cat > "$ROOTFS/tmp/configure-desktop.sh" <<'STAGE_EOF'
 #!/bin/bash
 set -u
 export XDG_CONFIG_HOME=/etc/skel/.config
@@ -429,9 +513,115 @@ WALLPAPER="$WALL"
 EOF
 exit 0
 STAGE_EOF
-chroot_sh LIVE_USER="$LIVE_USER" bash /tmp/configure-desktop.sh
+  chroot_sh LIVE_USER="$LIVE_USER" bash /tmp/configure-desktop.sh
+else
+  cat > "$ROOTFS/tmp/configure-desktop.sh" <<'STAGE_EOF'
+#!/bin/bash
+set -u
+CFG=/etc/skel/.config
+XF=$CFG/xfce4/xfconf/xfce-perchannel-xml
+mkdir -p "$XF" "$CFG/gtk-3.0" /etc/lightdm/lightdm.conf.d /usr/share/backgrounds/win11 /etc/win11-linux
 
-cat > "$ROOTFS/usr/local/bin/win11-first-login" <<'WIN11_FIRST_LOGIN_EOF'
+pick() {
+  local x
+  x=$(ls -1 "$1" 2>/dev/null | grep -i -- "$2" | grep -iv dark | head -1)
+  [ -z "$x" ] && x=$(ls -1 "$1" 2>/dev/null | grep -i -- "$2" | head -1)
+  echo "$x"
+}
+GTK=$(pick /usr/share/themes fluent); [ -z "$GTK" ] && GTK=Adwaita
+ICON=$(ls -1 /usr/share/icons 2>/dev/null | grep -ix win11 | head -1)
+[ -z "$ICON" ] && ICON=$(pick /usr/share/icons win11)
+[ -z "$ICON" ] && ICON=Adwaita
+WM=Default; [ -d "/usr/share/themes/$GTK/xfwm4" ] && WM=$GTK
+COMP=false; [ "${COMPOSITOR:-0}" = "1" ] && COMP=true
+
+cat > "$XF/xsettings.xml" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xsettings" version="1.0">
+  <property name="Net" type="empty">
+    <property name="ThemeName" type="string" value="$GTK"/>
+    <property name="IconThemeName" type="string" value="$ICON"/>
+  </property>
+  <property name="Gtk" type="empty">
+    <property name="FontName" type="string" value="Inter 10"/>
+  </property>
+</channel>
+EOF
+
+cat > "$XF/xfwm4.xml" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="theme" type="string" value="$WM"/>
+    <property name="use_compositing" type="bool" value="$COMP"/>
+    <property name="button_layout" type="string" value="|HMC"/>
+  </property>
+</channel>
+EOF
+
+cat > "$XF/xfce4-panel.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-panel" version="1.0">
+  <property name="configver" type="int" value="2"/>
+  <property name="panels" type="array">
+    <value type="int" value="1"/>
+    <property name="panel-1" type="empty">
+      <property name="position" type="string" value="p=10;x=0;y=0"/>
+      <property name="length" type="uint" value="100"/>
+      <property name="position-locked" type="bool" value="true"/>
+      <property name="size" type="uint" value="44"/>
+      <property name="plugin-ids" type="array">
+        <value type="int" value="1"/>
+        <value type="int" value="2"/>
+        <value type="int" value="3"/>
+        <value type="int" value="4"/>
+        <value type="int" value="5"/>
+        <value type="int" value="6"/>
+      </property>
+    </property>
+  </property>
+  <property name="plugins" type="empty">
+    <property name="plugin-1" type="string" value="whiskermenu"/>
+    <property name="plugin-2" type="string" value="tasklist">
+      <property name="show-labels" type="bool" value="false"/>
+      <property name="flat-buttons" type="bool" value="true"/>
+    </property>
+    <property name="plugin-3" type="string" value="separator">
+      <property name="expand" type="bool" value="true"/>
+    </property>
+    <property name="plugin-4" type="string" value="systray"/>
+    <property name="plugin-5" type="string" value="pulseaudio"/>
+    <property name="plugin-6" type="string" value="clock"/>
+  </property>
+</channel>
+EOF
+
+cat > /usr/share/backgrounds/win11/bloom.svg <<'EOF'
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <defs><radialGradient id="a" cx="50%" cy="58%" r="75%">
+    <stop offset="0" stop-color="#7cc0ff"/><stop offset="0.45" stop-color="#1f6fe5"/><stop offset="1" stop-color="#051c4a"/>
+  </radialGradient></defs>
+  <rect width="1920" height="1080" fill="url(#a)"/>
+</svg>
+EOF
+
+mkdir -p /etc/skel/{Desktop,Documents,Downloads,Pictures,Music,Videos}
+
+cat > /etc/lightdm/lightdm.conf.d/50-win11.conf <<EOF
+[Seat:*]
+autologin-user=$LIVE_USER
+autologin-user-timeout=0
+autologin-session=xfce
+user-session=xfce
+greeter-session=lightdm-gtk-greeter
+EOF
+exit 0
+STAGE_EOF
+  chroot_sh LIVE_USER="$LIVE_USER" COMPOSITOR="$COMPOSITOR" bash /tmp/configure-desktop.sh
+fi
+
+if [[ "$PROFILE" == "kde" ]]; then
+  cat > "$ROOTFS/usr/local/bin/win11-first-login" <<'WIN11_FIRST_LOGIN_EOF'
 #!/bin/bash
 MARK="$HOME/.config/.win11-layout-applied"
 [ -e "$MARK" ] && exit 0
@@ -490,10 +680,10 @@ fi
 mkdir -p "$(dirname "$MARK")"
 touch "$MARK"
 WIN11_FIRST_LOGIN_EOF
-chmod +x "$ROOTFS/usr/local/bin/win11-first-login"
+  chmod +x "$ROOTFS/usr/local/bin/win11-first-login"
 
-mkdir -p "$ROOTFS/etc/xdg/autostart"
-cat > "$ROOTFS/etc/xdg/autostart/win11-first-login.desktop" <<'EOF'
+  mkdir -p "$ROOTFS/etc/xdg/autostart"
+  cat > "$ROOTFS/etc/xdg/autostart/win11-first-login.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
 Name=Windows 11 layout (first login)
@@ -502,6 +692,32 @@ X-KDE-autostart-phase=2
 OnlyShowIn=KDE;
 NoDisplay=true
 EOF
+else
+  cat > "$ROOTFS/usr/local/bin/win11-first-login" <<'WIN11_FIRST_LOGIN_EOF'
+#!/bin/bash
+MARK="$HOME/.config/.win11-layout-applied"
+[ -e "$MARK" ] && exit 0
+for _ in $(seq 1 40); do
+  xfconf-query -c xfce4-desktop -l 2>/dev/null | grep -q 'last-image$' && break
+  sleep 1
+done
+xfconf-query -c xfce4-desktop -l 2>/dev/null | grep 'last-image$' | while read -r p; do
+  xfconf-query -c xfce4-desktop -p "$p" -s /usr/share/backgrounds/win11/bloom.svg
+done
+mkdir -p "$(dirname "$MARK")"; touch "$MARK"
+WIN11_FIRST_LOGIN_EOF
+  chmod +x "$ROOTFS/usr/local/bin/win11-first-login"
+
+  mkdir -p "$ROOTFS/etc/xdg/autostart"
+  cat > "$ROOTFS/etc/xdg/autostart/win11-first-login.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Windows 11 wallpaper (first login)
+Exec=/usr/local/bin/win11-first-login
+OnlyShowIn=XFCE;
+NoDisplay=true
+EOF
+fi
 
 ###############################################################################
 # 8. Services
@@ -519,10 +735,31 @@ EOF
 sed -i 's/^ENABLED=.*/ENABLED=yes/' "$ROOTFS/etc/ufw/ufw.conf"
 sed -i 's/^DEFAULT_INPUT_POLICY=.*/DEFAULT_INPUT_POLICY="DROP"/' "$ROOTFS/etc/default/ufw"
 
+if [[ "$PROFILE" == "lite" ]]; then DM_UNITS="lightdm"; else DM_UNITS="sddm cups"; fi
 chroot_sh systemctl enable NetworkManager systemd-resolved systemd-timesyncd \
-  bluetooth cups ssh ufw sddm
+  bluetooth ssh ufw $DM_UNITS
 chroot_sh systemctl set-default graphical.target
 chroot_sh systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service || true
+
+if [[ "$PROFILE" == "lite" ]]; then
+  # Mask heavy background timers for ultra-fast mobile boot
+  chroot_sh systemctl mask apt-daily.timer apt-daily-upgrade.timer motd-news.timer \
+    dpkg-db-backup.timer e2scrub_all.timer fstrim.timer man-db.timer \
+    NetworkManager-wait-online.service systemd-networkd-wait-online.service || true
+
+  # Low-memory zram swap configuration
+  cat > "$ROOTFS/etc/systemd/zram-generator.conf" <<'EOF'
+[zram0]
+zram-size = ram
+compression-algorithm = zstd
+swap-priority = 100
+EOF
+  cat > "$ROOTFS/etc/sysctl.d/99-lowmem.conf" <<'EOF'
+vm.swappiness = 100
+vm.vfs_cache_pressure = 120
+vm.page-cluster = 0
+EOF
+fi
 
 ###############################################################################
 # 9. Slimming & initramfs
@@ -556,7 +793,6 @@ exit 0
 STAGE_EOF
 chroot_sh PRUNE_FIRMWARE="$PRUNE_FIRMWARE" bash /tmp/slim.sh
 
-# Kernel + initrd go next to the squashfs on the ISO (Fixed capitalization here)
 VMLINUZ="$(ls -1 "$ROOTFS"/boot/vmlinuz-* | sort -V | tail -1)"
 INITRD="$(ls -1 "$ROOTFS"/boot/initrd.img-* | sort -V | tail -1)"
 [[ -f "$VMLINUZ" && -f "$INITRD" ]] || die "Kernel/initrd not found in chroot /boot"
@@ -576,11 +812,16 @@ ln -s ../run/systemd/resolve/stub-resolv.conf "$ROOTFS/etc/resolv.conf"
 printf '%s' "$(du -sx --block-size=1 "$ROOTFS" | cut -f1)" > "$ISODIR/casper/filesystem.size"
 
 ###############################################################################
-# 10. SquashFS with maximum xz compression
+# 10. SquashFS with compression options
 ###############################################################################
-log "Creating filesystem.squashfs"
+log "Creating filesystem.squashfs ($SQUASH_COMP)"
+case "$SQUASH_COMP" in
+  xz)   COMP_OPTS=(-comp xz -b 1M -Xdict-size 100% -Xbcj x86) ;;
+  zstd) COMP_OPTS=(-comp zstd -Xcompression-level 19 -b 256K) ;;
+  *)    die "SQUASH_COMP must be xz or zstd" ;;
+esac
 mksquashfs "$ROOTFS" "$ISODIR/casper/filesystem.squashfs" \
-  -comp xz -b 1M -Xdict-size 100% -Xbcj x86 \
+  "${COMP_OPTS[@]}" \
   -noappend -no-recovery -processors "$(nproc)" \
   -wildcards -e 'boot/vmlinuz*' 'boot/initrd.img*' 'boot/System.map*' 'boot/config-*' \
   -e 'proc/*' 'sys/*' 'dev/*' 'run/*' 'tmp/*'
@@ -590,23 +831,50 @@ mksquashfs "$ROOTFS" "$ISODIR/casper/filesystem.squashfs" \
 ###############################################################################
 log "Preparing bootloader"
 touch "$ISODIR/.win11-live"
-echo "Mini Win11 Linux (Ubuntu $RELEASE) - $(date -u +%Y-%m-%d)" > "$ISODIR/.disk/info"
+echo "Win11-Linux Minimal [$PROFILE] (Ubuntu $RELEASE) - $(date -u +%Y-%m-%d)" > "$ISODIR/.disk/info"
 
-cat > "$ISODIR/boot/grub/grub.cfg" <<'EOF'
+if [[ "$PROFILE" == "lite" ]]; then
+  CMDLINE="boot=casper loglevel=3 mitigations=off nowatchdog fsck.mode=skip noresume"
+  cat > "$ISODIR/boot/grub/grub.cfg" <<EOF
+search --no-floppy --set=root --file /.win11-live
+insmod all_video
+set gfxpayload=text
+set default=0
+set timeout=2
+
+menuentry "Win11-Linux Minimal (live, 1 GB RAM friendly)" {
+    linux /casper/vmlinuz $CMDLINE quiet splash ---
+    initrd /casper/initrd
+}
+menuentry "Safe graphics (nomodeset)" {
+    linux /casper/vmlinuz $CMDLINE nomodeset quiet splash ---
+    initrd /casper/initrd
+}
+menuentry "Text mode only (boot test)" {
+    linux /casper/vmlinuz $CMDLINE systemd.unit=multi-user.target ---
+    initrd /casper/initrd
+}
+menuentry "Check disc for defects" {
+    linux /casper/vmlinuz boot=casper integrity-check ---
+    initrd /casper/initrd
+}
+EOF
+else
+  cat > "$ISODIR/boot/grub/grub.cfg" <<'EOF'
 search --no-floppy --set=root --file /.win11-live
 insmod all_video
 set default=0
 set timeout=5
 
-menuentry "Mini Win11 Linux (live)" {
+menuentry "Win11-Linux Minimal (KDE live)" {
     linux /casper/vmlinuz boot=casper quiet ---
     initrd /casper/initrd
 }
-menuentry "Mini Win11 Linux (safe graphics)" {
+menuentry "Safe graphics (nomodeset)" {
     linux /casper/vmlinuz boot=casper nomodeset ---
     initrd /casper/initrd
 }
-menuentry "Mini Win11 Linux (load to RAM)" {
+menuentry "Load to RAM" {
     linux /casper/vmlinuz boot=casper toram quiet ---
     initrd /casper/initrd
 }
@@ -615,6 +883,7 @@ menuentry "Check disc for defects" {
     initrd /casper/initrd
 }
 EOF
+fi
 
 cat > "$BOOTWORK/grub-embed.cfg" <<'EOF'
 search --no-floppy --set=root --file /.win11-live
