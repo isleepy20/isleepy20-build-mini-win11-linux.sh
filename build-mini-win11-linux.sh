@@ -735,7 +735,7 @@ EOF
 sed -i 's/^ENABLED=.*/ENABLED=yes/' "$ROOTFS/etc/ufw/ufw.conf"
 sed -i 's/^DEFAULT_INPUT_POLICY=.*/DEFAULT_INPUT_POLICY="DROP"/' "$ROOTFS/etc/default/ufw"
 
-if [[ "$PROFILE" == "lite" ]]; then DM_UNITS="lightdm"; else DM_UNunits="sddm cups"; fi
+if [[ "$PROFILE" == "lite" ]]; then DM_UNITS="lightdm"; else DM_UNITS="sddm cups"; fi
 chroot_sh systemctl enable NetworkManager systemd-resolved systemd-timesyncd \
   bluetooth ssh ufw $DM_UNITS
 chroot_sh systemctl set-default graphical.target
@@ -858,6 +858,12 @@ menuentry "Check disc for defects" {
     linux /casper/vmlinuz boot=casper integrity-check ---
     initrd /casper/initrd
 }
+menuentry "Boot from next volume" {
+    exit
+}
+menuentry "UEFI Firmware Settings" {
+    fwsetup
+}
 EOF
 else
   cat > "$ISODIR/boot/grub/grub.cfg" <<'EOF'
@@ -881,6 +887,12 @@ menuentry "Load to RAM" {
 menuentry "Check disc for defects" {
     linux /casper/vmlinuz boot=casper integrity-check quiet ---
     initrd /casper/initrd
+}
+menuentry "Boot from next volume" {
+    exit
+}
+menuentry "UEFI Firmware Settings" {
+    fwsetup
 }
 EOF
 fi
@@ -926,7 +938,9 @@ rm -f "$ISO_PATH"
     -graft-points \
       "/EFI/efiboot.img=$BOOTWORK/efiboot.img" \
       "/boot/grub/bios.img=$BOOTWORK/bios.img" \
-      "." )
+      "." ) || die "Failed to generate hybrid ISO image."
+
+log "ISO successfully created at: $ISO_PATH"
 
 ###############################################################################
 # 12. Size check & release packaging
@@ -957,3 +971,5 @@ log "Final ISO size: ${gb} GB"
     echo "SHA256SUMS.txt"
   } > release-assets.txt
 )
+
+log "Build and packaging completed successfully."
