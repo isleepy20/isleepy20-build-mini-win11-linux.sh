@@ -1,1 +1,16 @@
+#!/bin/bash
+CONFIG_FILE="$HOME/.config/current_theme"
+CURRENT_THEME=$(cat "$CONFIG_FILE" 2>/dev/null || echo "arch")
 
+if [ "$CURRENT_THEME" = "arch" ]; then
+    echo "Switching to Windows 11 Look..."
+    xfconf-query -c xsettings -p /Net/ThemeName -s "Adwaita-dark"
+    xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=6;x=0;y=0"
+    echo "win11" > "$CONFIG_FILE"
+else
+    echo "Switching to Native Arch Look..."
+    xfconf-query -c xsettings -p /Net/ThemeName -s "Adwaita"
+    xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=0;x=0;y=0"
+    echo "arch" > "$CONFIG_FILE"
+fi
+xfce4-panel --restart
